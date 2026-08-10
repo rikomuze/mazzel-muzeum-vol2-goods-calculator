@@ -437,6 +437,53 @@
   .variant-label{font-size:10.5px;font-weight:700;color:var(--faded);letter-spacing:.06em}
   .member-box.fc-box{border-color:rgba(192,71,47,.40);background:rgba(255,247,243,.64)}
 
+
+  /* ---------- 購入特典・会計分け ---------- */
+  .benefit-box{
+    margin-top:16px;padding:16px;border:1px dashed rgba(65,55,48,.35);
+    background:rgba(255,255,255,.5);border-radius:10px;
+  }
+  .benefit-title{font-size:13px;font-weight:900;letter-spacing:.06em;margin-bottom:6px}
+  .benefit-desc{font-size:11px;line-height:1.65;color:var(--muted);margin-bottom:12px}
+  .benefit-summary{
+    display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px
+  }
+  .benefit-stat{
+    border:1px solid var(--line);background:#fff;padding:10px;border-radius:8px;
+  }
+  .benefit-stat span{display:block;font-size:9px;color:var(--muted);font-weight:700}
+  .benefit-stat strong{display:block;font-size:17px;margin-top:3px}
+  .checkout-list{display:grid;gap:8px}
+  .checkout-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px}
+  .checkout-head{display:flex;justify-content:space-between;gap:10px;font-weight:900;font-size:11px}
+  .checkout-gift{font-size:9px;padding:2px 6px;border-radius:999px;background:#f7e7ed;white-space:nowrap}
+  .checkout-items{font-size:9px;line-height:1.55;color:var(--muted);margin-top:6px}
+  .checkout-money{display:grid;grid-template-columns:1fr auto;gap:3px 12px;margin-top:7px;font-size:10px}
+  .benefit-foot{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:10px;line-height:1.7}
+  .benefit-empty{font-size:10px;color:var(--muted);line-height:1.65}
+
+
+  .benefit-toggle{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:11px 12px;border:1px solid var(--line);background:#fff;border-radius:9px;
+    margin-bottom:10px;cursor:pointer;
+  }
+  .benefit-toggle-copy strong{display:block;font-size:11px}
+  .benefit-toggle-copy span{display:block;font-size:9px;color:var(--muted);margin-top:2px;line-height:1.5}
+  .benefit-switch{position:relative;width:42px;height:24px;flex:0 0 auto}
+  .benefit-switch input{position:absolute;opacity:0;pointer-events:none}
+  .benefit-slider{
+    position:absolute;inset:0;border-radius:999px;background:#d8d2ca;
+    transition:.2s;border:1px solid rgba(65,55,48,.12)
+  }
+  .benefit-slider:before{
+    content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;
+    background:#fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:.2s
+  }
+  .benefit-switch input:checked + .benefit-slider{background:#d99aaa}
+  .benefit-switch input:checked + .benefit-slider:before{transform:translateX(18px)}
+  .benefit-detail[hidden]{display:none!important}
+
 </style>
 </head>
 <body>
@@ -480,6 +527,23 @@
               </div>
             </div>
             <div class="warn" id="warningBox"></div>
+
+            <div class="benefit-box" id="benefitBox">
+              <div class="benefit-title">購入特典シミュレーター</div>
+              <label class="benefit-toggle">
+                <span class="benefit-toggle-copy">
+                  <strong>ショッパー枚数を最大化する</strong>
+                  <span>会計を分けて、送料770円込みで最適な買い方を計算</span>
+                </span>
+                <span class="benefit-switch">
+                  <input type="checkbox" id="benefitToggle">
+                  <span class="benefit-slider" aria-hidden="true"></span>
+                </span>
+              </label>
+              <div class="benefit-detail" id="benefitDetail" hidden>
+                <div id="benefitResult" class="benefit-empty">商品を選ぶと、会計分けを自動で計算します。</div>
+              </div>
+            </div>
           </div>
           <div class="zigzag bottom" aria-hidden="true"></div>
         </div>
@@ -575,6 +639,9 @@ var copyBtn = document.getElementById('copyBtn');
 var downloadBtn = document.getElementById('downloadBtn');
 var resetBtn = document.getElementById('resetBtn');
 var statusEl = document.getElementById('status');
+var benefitResult = document.getElementById('benefitResult');
+var benefitToggle = document.getElementById('benefitToggle');
+var benefitDetail = document.getElementById('benefitDetail');
 
 /* ---------- ユーティリティ ---------- */
 function formatYen(value) { return '¥' + Number(value).toLocaleString('ja-JP'); }
@@ -618,6 +685,191 @@ function getWarnings() {
     }
   });
   return warnings;
+}
+
+
+/* ---------- 購入特典：ショッパー枚数最大化 ---------- */
+var BENEFIT_THRESHOLD = 8000;
+var SHIPPING_FEE = 770;
+
+function getAtomicItems() {
+  var items = [];
+  goods.forEach(function (item) {
+    if (item.variants) {
+      item.variants.forEach(function (variant) {
+        var q = variantQuantities[item.id][variant] || 0;
+        for (var i = 0; i < q; i++) {
+          items.push({
+            label: item.name + ' / ' + variant,
+            price: item.price
+          });
+        }
+      });
+    } else {
+      var q = quantities[item.id] || 0;
+      for (var i = 0; i < q; i++) {
+        items.push({ label: item.name, price: item.price });
+      }
+    }
+  });
+  return items;
+}
+
+/* 8,000円以上になる組み合わせのうち、できるだけ8,000円に近いものを探す。
+   価格は100円単位なので、subset-sum DPを軽量に実行。 */
+function pickNearThreshold(items, threshold) {
+  if (!items.length) return null;
+  var unit = 100;
+  var prices = items.map(function(x){ return Math.round(x.price / unit); });
+  var target = Math.round(threshold / unit);
+  var total = prices.reduce(function(a,b){ return a+b; }, 0);
+  if (total < target) return null;
+
+  // threshold以上について、必要以上に大きい探索を抑える
+  var maxSearch = Math.min(total, target + Math.max.apply(null, prices) + 60);
+  var prev = new Array(maxSearch + 1).fill(null);
+  prev[0] = { idx:-1, from:-1 };
+
+  for (var i = 0; i < prices.length; i++) {
+    var p = prices[i];
+    for (var s = maxSearch - p; s >= 0; s--) {
+      if (prev[s] !== null && prev[s + p] === null) {
+        prev[s + p] = { idx:i, from:s };
+      }
+    }
+  }
+
+  var best = -1;
+  for (var sum = target; sum <= maxSearch; sum++) {
+    if (prev[sum] !== null) { best = sum; break; }
+  }
+  if (best < 0) return null;
+
+  var chosen = [];
+  var cur = best;
+  while (cur > 0) {
+    var node = prev[cur];
+    if (!node || node.idx < 0) break;
+    chosen.push(node.idx);
+    cur = node.from;
+  }
+  return { indices: chosen, subtotal: best * unit };
+}
+
+function groupLabels(items) {
+  var map = {};
+  items.forEach(function(x){
+    map[x.label] = (map[x.label] || 0) + 1;
+  });
+  return Object.keys(map).map(function(label){
+    return escapeHtml(label) + (map[label] > 1 ? ' × ' + map[label] : '');
+  }).join('<br>');
+}
+
+function optimizeCheckouts(items) {
+  var remaining = items.slice();
+  var totalGoods = remaining.reduce(function(s,x){ return s+x.price; }, 0);
+  var theoreticalMax = Math.floor(totalGoods / BENEFIT_THRESHOLD);
+  if (theoreticalMax <= 0) {
+    return {
+      checkouts: remaining.length ? [{items:remaining, subtotal:totalGoods, qualifies:false}] : [],
+      bagCount:0
+    };
+  }
+
+  var groups = [];
+
+  // 最後の1会計を残しつつ、8,000円に近い会計を順次作る。
+  while (groups.length < theoreticalMax - 1) {
+    var pick = pickNearThreshold(remaining, BENEFIT_THRESHOLD);
+    if (!pick) break;
+
+    var chosenSet = {};
+    pick.indices.forEach(function(i){ chosenSet[i] = true; });
+    var group = [];
+    var rest = [];
+    remaining.forEach(function(x, i){
+      (chosenSet[i] ? group : rest).push(x);
+    });
+
+    var restTotal = rest.reduce(function(s,x){ return s+x.price; },0);
+    // 残りの目標会計数を成立させられないなら、ここでは切らない
+    var neededForRest = (theoreticalMax - groups.length - 1) * BENEFIT_THRESHOLD;
+    if (restTotal < neededForRest) break;
+
+    groups.push({
+      items:group,
+      subtotal:group.reduce(function(s,x){ return s+x.price; },0),
+      qualifies:true
+    });
+    remaining = rest;
+  }
+
+  var remainingTotal = remaining.reduce(function(s,x){ return s+x.price; },0);
+
+  // 残りが8,000円以上なら1会計にする
+  if (remaining.length) {
+    groups.push({
+      items:remaining,
+      subtotal:remainingTotal,
+      qualifies:remainingTotal >= BENEFIT_THRESHOLD
+    });
+  }
+
+  var bagCount = groups.filter(function(g){ return g.qualifies; }).length;
+
+  // 万一理論値に届かない場合は「確実に成立した枚数」を表示する
+  return { checkouts:groups, bagCount:bagCount };
+}
+
+function renderBenefit(rowsTotal) {
+  if (!benefitToggle || !benefitToggle.checked) {
+    if (benefitDetail) benefitDetail.hidden = true;
+    return;
+  }
+  if (benefitDetail) benefitDetail.hidden = false;
+  var items = getAtomicItems();
+  if (!items.length) {
+    benefitResult.className = 'benefit-empty';
+    benefitResult.innerHTML = '商品を選ぶと、会計分けを自動で計算します。';
+    return;
+  }
+
+  var opt = optimizeCheckouts(items);
+  var checkouts = opt.checkouts;
+  var checkoutCount = checkouts.length;
+  var shippingTotal = checkoutCount * SHIPPING_FEE;
+  var totalWithShipping = rowsTotal + shippingTotal;
+  var oneCheckoutTotal = rowsTotal + SHIPPING_FEE;
+  var extraShipping = Math.max(0, shippingTotal - SHIPPING_FEE);
+
+  var cards = checkouts.map(function(g, idx){
+    var shipping = SHIPPING_FEE;
+    return '<div class="checkout-card">' +
+      '<div class="checkout-head"><span>会計 ' + (idx + 1) + '</span>' +
+      '<span class="checkout-gift">' + (g.qualifies ? '🎁 バッグ1枚' : '特典対象外') + '</span></div>' +
+      '<div class="checkout-items">' + groupLabels(g.items) + '</div>' +
+      '<div class="checkout-money">' +
+        '<span>商品代</span><strong>' + formatYen(g.subtotal) + '</strong>' +
+        '<span>送料</span><span>' + formatYen(shipping) + '</span>' +
+        '<span>支払額</span><strong>' + formatYen(g.subtotal + shipping) + '</strong>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  benefitResult.className = '';
+  benefitResult.innerHTML =
+    '<div class="benefit-summary">' +
+      '<div class="benefit-stat"><span>ショッパー最大</span><strong>' + opt.bagCount + '枚</strong></div>' +
+      '<div class="benefit-stat"><span>おすすめ会計数</span><strong>' + checkoutCount + '回</strong></div>' +
+    '</div>' +
+    '<div class="checkout-list">' + cards + '</div>' +
+    '<div class="benefit-foot">' +
+      '商品合計：<strong>' + formatYen(rowsTotal) + '</strong><br>' +
+      '送料合計：<strong>' + formatYen(shippingTotal) + '</strong>（' + formatYen(SHIPPING_FEE) + ' × ' + checkoutCount + '会計）<br>' +
+      '送料込み総額：<strong>' + formatYen(totalWithShipping) + '</strong><br>' +
+      (checkoutCount > 1 ? '1会計で買う場合より送料が <strong>+' + formatYen(extraShipping) + '</strong>' : '追加送料なし') +
+    '</div>';
 }
 
 /* ---------- 描画 ---------- */
@@ -684,6 +936,8 @@ function update() {
       }).join('');
   }
 
+  renderBenefit(total);
+
   var warnings = getWarnings();
   if (warnings.length > 0) {
     warningBox.style.display = 'block';
@@ -692,6 +946,22 @@ function update() {
     warningBox.style.display = 'none';
     warningBox.textContent = '';
   }
+}
+
+
+function getBenefitCopyText() {
+  if (!benefitToggle || !benefitToggle.checked) return '';
+  var items = getAtomicItems();
+  if (!items.length) return '';
+  var goodsTotal = items.reduce(function(s,x){ return s+x.price; },0);
+  var opt = optimizeCheckouts(items);
+  var shippingTotal = opt.checkouts.length * SHIPPING_FEE;
+  var lines = ['','【ショッパー最大化】','最大 ' + opt.bagCount + '枚 / ' + opt.checkouts.length + '会計'];
+  opt.checkouts.forEach(function(g, i){
+    lines.push('会計' + (i+1) + '：商品 ' + formatYen(g.subtotal) + ' + 送料 ' + formatYen(SHIPPING_FEE) + ' = ' + formatYen(g.subtotal + SHIPPING_FEE) + (g.qualifies ? '（特典1枚）' : ''));
+  });
+  lines.push('送料込み総額：' + formatYen(goodsTotal + shippingTotal));
+  return lines.join('\n');
 }
 
 /* ---------- 操作(イベント委譲・グローバル関数なし) ---------- */
@@ -762,7 +1032,8 @@ copyBtn.addEventListener('click', async function () {
   var count = rows.reduce(function (s, r) { return s + r.count; }, 0);
   var text = [
     '【MAZZEL Play at the MUZEUM vol.2 グッズ購入費用メモ】'
-  ].concat(rows.map(function (row) { return '・' + row.label + ' = ' + formatYen(row.subtotal); }))
+  ].concat(rows.map(function (row) { return '・' + row.label + ' = ' + formatYen(row.subtotal);
+  text += getBenefitCopyText(); }))
    .concat(['合計点数：' + count + '点', '合計金額：' + formatYen(total)])
    .join('\n');
 
@@ -861,6 +1132,14 @@ function setStatus(message, ok) {
   if (!message) return;
   clearTimeout(setStatus.timer);
   setStatus.timer = setTimeout(function () { statusEl.textContent = ''; }, 3500);
+}
+
+
+if (benefitToggle) {
+  benefitToggle.addEventListener('change', function () {
+    if (benefitDetail) benefitDetail.hidden = !benefitToggle.checked;
+    update();
+  });
 }
 
 /* ---------- 初期化 ---------- */
