@@ -1,0 +1,21 @@
+{
+  "name": "MUZEUM vol.2 グッズ計算機 EC｜MUZE TOOL BOX",
+  "short_name": "EC計算機",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1ebe1",
+  "theme_color": "#f1ebe1",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
